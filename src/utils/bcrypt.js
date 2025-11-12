@@ -8,7 +8,6 @@ exports.hash = async (plainPassword) => {
     return await bcrypt.hash(plainPassword, saltRounds);
 }
 
-
 // Hàm compare dùng để: So sánh mật khẩu người dùng với mật khẩu đã lưu trong database(đã được hash)
 // Output: true-> Mật khẩu đúng, false -> Mật khẩu sai
 exports.compare = async (userPassword, storedPassword) => {    

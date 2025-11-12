@@ -1,5 +1,6 @@
-const { Comment, User, CommentLike, Sequelize } = require('@/models');
-const notificationService = require('./notification.service');
+const { Comment, User, CommentLike, Post} = require('@/models');
+const { Op } = require('sequelize');
+const notificationService = require('../service/notification.service');
 
 const MAX_DEPTH = 3;
 
@@ -26,9 +27,30 @@ const addLikeData = async (comment, currentUserId) => {
   return comment;
 };
 
+// Helper function to extract mentions from text
+const extractMentions = (text) => {
+  if (!text) return [];
+  const regex = /@(\w+)/g;
+  const matches = text.match(regex);
+  // Trả về mảng các username không có ký tự '@' và loại bỏ trùng lặp
+  return matches ? [...new Set(matches.map(m => m.substring(1)))] : [];
+};
+
+// Helper function to process mentions in a comment
+const processCommentMentions = async (comment, text, io, onlineUsers) => {
+  const mentionedUsernames = extractMentions(text);
+  if (!mentionedUsernames.length) return;
+
+  const mentionedUsers = await User.findAll({ where: { username: { [Op.in]: mentionedUsernames } } });
+  await comment.setMentionedUsers(mentionedUsers);
+
+  for (const user of mentionedUsers) {
+    await notificationService.createNotification({ recipientId: user.id, senderId: comment.authorId, type: "mention_comment", entityId: comment.id }, io, onlineUsers);
+  }
+};
 const commentService = {
   // Tạo comment mới (có xử lý giới hạn 3 cấp reply)
-  async create(data) {
+  async create(data, io, onlineUsers) {
     if (data.parentId) {
       const parentComment = await Comment.findByPk(data.parentId);
       if (!parentComment) {
@@ -44,7 +66,24 @@ const commentService = {
       }
     }
     const comment = await Comment.create(data);
-    return this.getById(comment.id); // Trả về kèm author
+
+    // --- LOGIC THÔNG BÁO MỚI ---
+    // Lấy thông tin bài viết để biết ai là chủ nhân
+    const post = await Post.findByPk(data.postId, { attributes: ['authorId'] });
+    if (post && post.authorId !== data.authorId) { // Chỉ thông báo nếu người bình luận không phải chủ bài viết
+      await notificationService.createNotification({
+        recipientId: post.authorId,
+        senderId: data.authorId,
+        type: 'new_comment',
+        entityId: comment.id // Có thể dùng comment.id hoặc post.id tùy vào việc bạn muốn link đến đâu
+      }, io, onlineUsers);
+    }
+    // --- KẾT THÚC LOGIC THÔNG BÁO ---
+    
+    // --- LOGIC XỬ LÝ MENTION TRONG COMMENT ---
+    await processCommentMentions(comment, data.content, io, onlineUsers);
+
+    return this.getById(comment.id, data.authorId); // Trả về kèm author và trạng thái like
   },
 
   // Hàm đệ quy để tính độ sâu của comment
@@ -144,7 +183,7 @@ const commentService = {
     }
   },
 
-  async likeComment(commentId, userId) {
+  async likeComment(commentId, userId, io, onlineUsers) {
     const comment = await Comment.findByPk(commentId);
     if (!comment) {
       throw new Error('Comment not found');
@@ -158,12 +197,12 @@ const commentService = {
     const like = await CommentLike.create({ commentId, userId });
 
     // Create notification
-    await notificationService.createNotification({
+    if (comment.authorId !== userId) await notificationService.createNotification({
       recipientId: comment.authorId,
       senderId: userId,
       type: 'like_comment',
       entityId: comment.id
-    });
+    }, io, onlineUsers);
 
     return like;
   },

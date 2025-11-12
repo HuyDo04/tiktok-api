@@ -39,6 +39,11 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.ENUM('private', 'group'),
         allowNull: false,
       },
+      status: {
+        type: DataTypes.ENUM('pending', 'active'),
+        allowNull: false,
+        defaultValue: 'active',
+      },
       created_by: {
         type: DataTypes.INTEGER,
         allowNull: false,

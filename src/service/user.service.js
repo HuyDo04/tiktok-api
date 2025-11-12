@@ -1,10 +1,10 @@
-const { User, Post, Follow, BlockedUser, Sequelize } = require("../models");
-const notificationService = require('./notification.service');
+const { User, Post, Follow, BlockedUser, PostLike, Sequelize, Tag } = require("../models");
+const notificationService = require('../service/notification.service');
 
 const isBlocked = async (userId1, userId2) => {
   const block = await BlockedUser.findOne({
     where: {
-      [require('sequelize').Op.or]: [
+      [Sequelize.Op.or]: [
         { blockerId: userId1, blockedId: userId2 },
         { blockerId: userId2, blockedId: userId1 },
       ],
@@ -13,7 +13,7 @@ const isBlocked = async (userId1, userId2) => {
   return block;
 };
 
-exports.followUser = async (followerId, followingId) => {
+exports.followUser = async (followerId, followingId, io, onlineUsers) => {
   // Chuẩn hóa kiểu dữ liệu để đảm bảo so sánh và truy vấn chính xác
   const parsedFollowerId = parseInt(followerId, 10);
   const parsedFollowingId = parseInt(followingId, 10);
@@ -56,7 +56,13 @@ exports.followUser = async (followerId, followingId) => {
       senderId: followerId,
       type: 'new_friend',
       entityId: followerId
-    });
+    }, io, onlineUsers);
+    await notificationService.createNotification({
+      recipientId: followerId, // Gửi cho cả người vừa follow
+      senderId: followingId,
+      type: 'new_friend',
+      entityId: followingId
+    }, io, onlineUsers);
   } else {
     newFollow.dataValues.isFriend = false; // Đảm bảo trường isFriend: false luôn có trong response
     // Nếu không phải là bạn bè, chỉ gửi thông báo "new_follower"
@@ -65,7 +71,7 @@ exports.followUser = async (followerId, followingId) => {
       senderId: followerId,
       type: 'new_follower',
       entityId: followerId
-    });
+    }, io, onlineUsers);
   }
 
   return newFollow;
@@ -229,7 +235,48 @@ exports.getAllUser = async (currentUserId, searchQuery) => {
 
   return await User.findAll({
     where: whereClause,
-    attributes: ['id', 'username', 'avatar', 'bio'] // Chỉ trả về các trường công khai
+    attributes: [
+      'id',
+      'username',
+      'avatar',
+      'bio',
+      [
+        Sequelize.literal(`(SELECT COUNT(*) FROM Follows WHERE followingId = User.id)`),
+        'followerCount'
+      ],
+      [
+        Sequelize.literal(`(SELECT COUNT(*) FROM Follows WHERE followerId = User.id)`),
+        'followingCount'
+      ],
+      [Sequelize.literal(`(SELECT COUNT(*) FROM postLikes WHERE postId IN (SELECT id FROM posts WHERE authorId = User.id))`), 'totalLikes'],
+    ],
+    include: [
+      {
+        model: Post,
+        as: 'posts',
+        attributes: [],
+        required: false,
+        include: [{
+          model: PostLike,
+          as: 'likes',
+          attributes: [],
+          required: false,
+        }]
+      },
+      {
+        model: Follow,
+        as: 'FollowersCount',
+        attributes: [],
+        required: false,
+      },
+      {
+        model: Follow,
+        as: 'FollowingCount',
+        attributes: [],
+        required: false,
+      }
+    ],
+    group: ['User.id'],
   });
 };
 
@@ -301,6 +348,65 @@ exports.getUserPosts = async (targetUserId, currentUserId) => {
   return user.posts;
 };
 
+exports.getUserVideosByUsername = async (targetUsername, currentUserId) => {
+  const targetUser = await User.findOne({
+    where: { username: targetUsername },
+    attributes: ['id', 'username', 'avatar', 'bio']
+  });
+
+  if (!targetUser) {
+    throw new Error("User not found");
+  }
+
+  const targetUserId = targetUser.id;
+
+  // Kiểm tra chặn: Nếu người xem bị chủ sở hữu chặn hoặc ngược lại
+  if (currentUserId) {
+    const isCurrentUserBlockedByTarget = await isBlocked(targetUserId, currentUserId);
+    const isTargetUserBlockedByCurrentUser = await isBlocked(currentUserId, targetUserId);
+
+    if (isCurrentUserBlockedByTarget || isTargetUserBlockedByCurrentUser) {
+      throw new Error("Bạn không có quyền truy cập người dùng này.");
+    }
+  }
+
+  let allowedVisibilities = ['public'];
+
+  if (currentUserId) {
+    if (currentUserId === targetUserId) {
+      // Nếu là chủ sở hữu, có thể xem tất cả video
+      allowedVisibilities = ['public', 'friends', 'private'];
+    } else {
+      // Kiểm tra xem currentUserId có phải là bạn bè của targetUser không
+      const areFriends = await exports.areTheyFriends(currentUserId, targetUserId);
+      if (areFriends) {
+        allowedVisibilities = ['public', 'friends'];
+      }
+      // Nếu không phải bạn bè, mặc định vẫn là 'public'
+    }
+  }
+
+  const videos = await Post.findAll({
+    where: {
+      authorId: targetUserId,
+      visibility: { [Sequelize.Op.in]: allowedVisibilities },
+      [Sequelize.Op.and]: [
+        Sequelize.literal('Post.media IS NOT NULL'), // Đảm bảo trường media không null
+        Sequelize.literal('JSON_LENGTH(Post.media) > 0'), // Đảm bảo mảng media không rỗng
+        Sequelize.literal("JSON_EXTRACT(Post.media, '$[0].type') = 'video'") // Kiểm tra type của phần tử đầu tiên
+      ]
+    },
+    order: [['createdAt', 'DESC']],
+    include: [
+      { model: User, as: 'author', attributes: ['id', 'username', 'avatar', 'bio'] },
+      { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } },
+    ],
+    attributes: { include: [[Sequelize.col("viewCount"), "viewCount"]] },
+  });
+
+  return videos;
+};
+
 exports.checkUsernameExists = async (username) => {
   const user = await User.findOne({
     where: {
@@ -324,4 +430,63 @@ exports.getFollowingIds = async (userId) => {
     attributes: ['followingId'],
   });
   return follows.map((follow) => follow.followingId);
+};
+
+
+exports.getFriendIds = async (userId) => {
+  const friendFollows = await Follow.findAll({
+    where: {
+      followerId: userId,
+      isFriend: true
+    },
+    attributes: ['followingId']
+  });
+  return friendFollows.map(f => f.followingId);
+};
+
+/**
+ * Kiểm tra xem hai người dùng có phải là bạn bè không.
+ * @param {number} userId1 - ID người dùng 1.
+ * @param {number} userId2 - ID người dùng 2.
+ * @returns {Promise<boolean>} - True nếu là bạn bè, ngược lại là false.
+ */
+exports.areTheyFriends = async (userId1, userId2) => {
+  const friendship = await Follow.findOne({
+    where: { followerId: userId1, followingId: userId2, isFriend: true }
+  });
+  return !!friendship;
+};
+
+exports.getFollowStatus = async (currentUserId, targetUserId) => {
+  if (!currentUserId) {
+    return "Follow"; // If not logged in, always show "Follow"
+  }
+
+  if (currentUserId === targetUserId) {
+    return "You"; // Current user is the target user
+  }
+
+  // Check if current user is blocking target user or vice versa
+  const isCurrentUserBlocking = await isBlocked(currentUserId, targetUserId);
+  const isTargetUserBlocking = await isBlocked(targetUserId, currentUserId);
+
+  if (isCurrentUserBlocking || isTargetUserBlocking) {
+    return "Blocked"; // Or handle as appropriate, e.g., "Cannot view profile"
+  }
+
+  const isFollowing = await Follow.findOne({
+    where: { followerId: currentUserId, followingId: targetUserId },
+  });
+
+  const isFollowedByTarget = await Follow.findOne({
+    where: { followerId: targetUserId, followingId: currentUserId },
+  });
+
+  if (isFollowing && isFollowedByTarget) {
+    return "Friends";
+  } else if (isFollowing) {
+    return "Following";
+  } else {
+    return "Follow";
+  }
 };

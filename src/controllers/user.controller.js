@@ -121,6 +121,25 @@ exports.getUserPosts = async (req, res) => {
   }
 };
 
+exports.getUserVideosByUsername = async (req, res) => {
+  try {
+    const currentUserId = req.user ? req.user.id : null;
+    const targetUsername = req.params.username;
+
+    const videos = await userService.getUserVideosByUsername(targetUsername, currentUserId);
+    res.json(videos);
+  } catch (error) {
+    console.error("Lỗi lấy video của người dùng theo username:", error);
+    if (error.message === "User not found") {
+      return res.status(404).json({ message: "Người dùng không tồn tại." });
+    }
+    if (error.message === "Bạn không có quyền truy cập người dùng này.") {
+      return res.status(403).json({ message: error.message });
+    }
+    res.status(500).json({ message: "Lỗi server" });
+  }
+};
+
 exports.checkUsername = async (req, res) => {
     try {
         const { username } = req.query;
@@ -231,5 +250,22 @@ exports.getFriends = async (req, res) => {
     res.json(friends);
   } catch (error) {
     res.status(500).json({ message: "Lỗi khi lấy danh sách bạn bè.", error: error.message });
+  }
+};
+
+exports.getFollowStatus = async (req, res) => {
+  try {
+    const currentUserId = req.user ? req.user.id : null;
+    const targetUserId = req.params.id;
+
+    if (!targetUserId) {
+      return res.status(400).json({ message: "Target user ID is required." });
+    }
+
+    const status = await userService.getFollowStatus(currentUserId, targetUserId);
+    res.json({ status });
+  } catch (error) {
+    console.error("Error getting follow status:", error);
+    res.status(500).json({ message: "Error getting follow status.", error: error.message });
   }
 };

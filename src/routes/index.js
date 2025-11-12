@@ -3,11 +3,12 @@ const express = require("express");
 const authRouter = require("./auth.route");
 const userRoute = require("./user.route");
 const topicRoute = require("./topic.route");
-const postRoute = require("./post.route");
+const postRoute = require("./post.route.js");
 const commentRoute = require("./comment.route");
 const notificationRouter = require("./notification.route");
 const chatRoute = require("./chat.route");
 const streamRoute = require("./stream.route");
+const searchRoute = require("./search.route");
 
 const router = express.Router();
 
@@ -19,5 +20,6 @@ router.use("/comments", commentRoute);
 router.use("/notifications", notificationRouter);
 router.use("/chats", chatRoute);
 router.use("/streams", streamRoute);
+router.use("/search", searchRoute);
 
 module.exports = router

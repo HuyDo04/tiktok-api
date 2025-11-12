@@ -6,11 +6,6 @@ module.exports = (sequelize, DataTypes) => {
     "Post",
     {
       id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-      title: {
-        type: DataTypes.STRING,
-        allowNull: false,
-      },
-      excerpt: DataTypes.TEXT,
       slug: {
         type: DataTypes.STRING,
         unique: true,
@@ -26,32 +21,56 @@ module.exports = (sequelize, DataTypes) => {
       },
       publishedAt: DataTypes.DATE,
       readTime: DataTypes.INTEGER,
-      topicId: DataTypes.INTEGER,
       authorId: {
         type: DataTypes.INTEGER,
         allowNull: false,
       },
       content: {
         type: DataTypes.TEXT("long"),
-        allowNull: false,
+        allowNull: true, // Cho phép content có thể để trống (null)
       },
       media: {
         type: DataTypes.JSON,
         allowNull: true,
         defaultValue: [],
       },
+      // d:/Tiktok/Tiktok-api/src/models/post.model.js
+      visibility: {
+        type: DataTypes.ENUM('public', 'friends', 'private'),
+        allowNull: false,
+        defaultValue: 'public',
+      },
+      viewCount: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+      }
     },
     {
       tableName: "posts",
       timestamps: true,
       hooks: {
         beforeValidate: async (post, options) => {
-          // Only run on creation or if title/slug changes.
-          if (post.isNewRecord || post.changed('title') || post.changed('slug')) {
-            let baseSlug = slugify(post.slug || post.title || '');
+          // Only run on creation or if content changes and slug is not manually set.
+          if ((post.isNewRecord || post.changed('content')) && !post.changed('slug')) {
+            let baseSlug = '';
+            if (post.content) {
+              // Take the first 50 chars of content to create the slug.
+              const contentSegment = post.content.substring(0, 50);
+              baseSlug = slugify(contentSegment);
+            }
+
             if (!baseSlug) {
-              // Let the notNull validation handle cases where title and slug are empty.
-              return;
+              // If content is empty or just whitespace, create a random slug.
+              const generateRandomString = (length) => {
+                const characters = 'abcdefghijklmnopqrstuvwxyz0123456789';
+                let result = '';
+                const charactersLength = characters.length;
+                for (let i = 0; i < length; i++) {
+                  result += characters.charAt(Math.floor(Math.random() * charactersLength));
+                }
+                return result;
+              };
+              baseSlug = generateRandomString(8);
             }
 
             const PostModel = sequelize.models.Post;
@@ -101,14 +120,17 @@ module.exports = (sequelize, DataTypes) => {
 
   Post.associate = (models) => {
     Post.belongsTo(models.User, { foreignKey: "authorId", as: "author" });
-    Post.belongsTo(models.Topic, { foreignKey: "topicId", as: "topic" });
     Post.belongsToMany(models.Tag, {
-      through: "PostTags",
+      through: "post_tags",
       foreignKey: "postId",
       otherKey: "tagId",
       as: "tags",
     });
     Post.hasMany(models.PostLike, { foreignKey: 'postId', as: 'likes' });
+
+    // Association for Post Mentions
+    Post.hasMany(models.PostMention, { foreignKey: 'postId', as: 'mentions' });
+    Post.belongsToMany(models.User, { through: "PostMentions", as: 'mentionedUsers', foreignKey: 'postId', otherKey: 'userId' });
   };
 
   return Post;

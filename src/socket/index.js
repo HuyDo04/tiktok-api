@@ -6,6 +6,7 @@ const userService = require('../service/user.service');
 const chatSocketHandler = require('./chat.socket');
 const callSocketHandler = require('./call.socket');
 const livestreamSocketHandler = require('./livestream.js');
+const notificationSocketHandler = require('./notification.socket');
 
 const onlineUsers = new Map(); // { userId: socketId }
 
@@ -14,15 +15,15 @@ function initializeSocket(io) {
   io.use(async (socket, next) => {
     try {
       const token = socket.handshake.auth.token;
+      
       if (!token) {
         return next(new Error('Authentication error: Token not provided.'));
       }
-
+      
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findByPk(decoded.id, {
+      const user = await User.findByPk(decoded.userId, {
         attributes: ['id', 'username', 'avatar'],
       });
-
       if (!user) {
         return next(new Error('Authentication error: User not found.'));
       }
@@ -36,7 +37,6 @@ function initializeSocket(io) {
 
   io.on('connection', async (socket) => {
     const userId = socket.user.id.toString();
-    console.log(`User connected: ${socket.user.username} (Socket ID: ${socket.id})`);
 
     // --- Presence Management ---
     onlineUsers.set(userId, socket.id);
@@ -66,10 +66,10 @@ function initializeSocket(io) {
     chatSocketHandler(io, socket, onlineUsers);
     callSocketHandler(io, socket, onlineUsers);
     livestreamSocketHandler(io, socket);
+    notificationSocketHandler(io, socket);
 
     // --- Disconnect ---
     socket.on('disconnect', async () => {
-      console.log(`User disconnected: ${socket.user.username}`);
       onlineUsers.delete(userId);
 
       // Broadcast offline status to followers

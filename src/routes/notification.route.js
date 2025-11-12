@@ -9,4 +9,7 @@ router.get("/", checkAuth, notificationController.getNotifications);
 // Mark a notification as read
 router.patch("/:id/read", checkAuth, notificationController.markAsRead);
 
+// Mark all notifications as read
+router.post("/read-all", checkAuth, notificationController.markAllAsRead);
+
 module.exports = router;

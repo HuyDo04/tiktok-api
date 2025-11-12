@@ -77,9 +77,17 @@ module.exports = (sequelize, DataTypes) => {
       User.hasMany(models.RefreshToken, { foreignKey: 'user_id', as: 'refreshTokens' });
       User.hasMany(models.Post, { foreignKey: 'authorId', as: 'posts' });
 
+      // Association for Post Mentions
+      User.hasMany(models.PostMention, { foreignKey: 'userId', as: 'postMentions' });
+      User.belongsToMany(models.Post, { through: models.PostMention, as: 'mentionedInPosts', foreignKey: 'userId', otherKey: 'postId' });
+
       // New associations for Likes
       User.hasMany(models.PostLike, { foreignKey: 'userId', as: 'postLikes' });
       User.hasMany(models.CommentLike, { foreignKey: 'userId', as: 'commentLikes' });
+
+      // Association for Comment Mentions
+      User.hasMany(models.CommentMention, { foreignKey: 'userId', as: 'commentMentions' });
+      User.belongsToMany(models.Comment, { through: models.CommentMention, as: 'mentionedInComments', foreignKey: 'userId', otherKey: 'commentId' });
 
       // New associations for Follows (Many-to-Many)
       User.belongsToMany(models.User, { 
@@ -94,6 +102,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'followerId', 
         otherKey: 'followingId' 
       });
+
+      // Associations for counting followers and followings
+      User.hasMany(models.Follow, { as: 'FollowersCount', foreignKey: 'followingId' });
+      User.hasMany(models.Follow, { as: 'FollowingCount', foreignKey: 'followerId' });
 
       // New associations for Blocked Users (Many-to-Many)
       User.belongsToMany(models.User, { 
@@ -122,6 +134,12 @@ module.exports = (sequelize, DataTypes) => {
       User.hasMany(models.Message, {
         foreignKey: 'sender_id',
         as: 'sentMessages',
+      });
+
+      // Association for Search History
+      User.hasMany(models.SearchHistory, {
+        foreignKey: 'userId',
+        as: 'searchHistories',
       });
     };
   return User;

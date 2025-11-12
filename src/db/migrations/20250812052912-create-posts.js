@@ -15,6 +15,9 @@ module.exports = {
       excerpt: {
         type: Sequelize.TEXT,
       },
+      content: {
+        type: Sequelize.TEXT,
+      },
       slug: {
         type: Sequelize.STRING,
         unique: true, // Đảm bảo mỗi bài viết có 1 slug duy nhất

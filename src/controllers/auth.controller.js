@@ -166,6 +166,8 @@ exports.login = async (req, res) => {
     if(!isValid) res.status(401).json({message:"Tài khoản, mật khẩu không hợp lệ."});
 
     const token = signToken({userId: user.id})
+    console.log("token", token);
+    
     const refreshToken = await refreshTokenService.createRefreshToken(user.id);
     
     // req.session.userId = user.id;
@@ -317,7 +319,7 @@ exports.changePassword = async (req, res) => {
     
     let decoded;
     try {
-      decoded = jwt.verify(token, process.env.MAIL_JWT_SECRET);
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
     } catch (err) {
       return res.status(401).json({ message: "Token không hợp lệ hoặc đã hết hạn." });
     }
@@ -347,10 +349,6 @@ exports.changePassword = async (req, res) => {
 };
 
 
-exports.logout = async (req, res) => {
-    // await 
-    return res.status(201).json({message:"Đăng xuất thành công"})
-}
 
 // get current user
 exports.getCurrentUser = async (req, res) => {  
@@ -402,18 +400,22 @@ exports.refreshToken = async (req, res) => {
 
 exports.logout = async (req, res) => {
   try {
-    // Lấy refresh token từ body hoặc header
-    const refreshToken = req.body.refresh_token;
+    const refreshToken =
+      req.body.refresh_token ||
+      req.headers["x-refresh-token"] ||
+      req.cookies?.refresh_token;
+
     if (!refreshToken) {
       return res.status(400).json({ message: "Refresh token is required." });
     }
 
-    // Xoá refresh token khỏi DB
     await refreshTokenService.removeByToken(refreshToken);
 
+    // Nếu xóa thành công hoặc refresh token không tồn tại, trả 200
     return res.status(200).json({ message: "Đăng xuất thành công." });
   } catch (error) {
     console.error("Logout error:", error);
     return res.status(500).json({ message: "Đã xảy ra lỗi. Vui lòng thử lại." });
   }
 };
+

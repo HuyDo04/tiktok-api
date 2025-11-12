@@ -15,7 +15,6 @@ module.exports = (io, socket, onlineUsers) => {
     const { receiverId, isGroupCall } = data;
     const roomId = data.roomId || uuidV4(); // Use existing chat ID or create a new ID for the call
 
-    console.log(`User ${userId} is starting a call with ${receiverId}. Room ID: ${roomId}`);
 
     const receiverSocketId = onlineUsers.get(receiverId.toString());
     if (receiverSocketId) {
@@ -28,7 +27,6 @@ module.exports = (io, socket, onlineUsers) => {
     } else {
       // Handle case where the receiver is not online
       // Maybe send a push notification in the future
-      console.log(`User ${receiverId} is not online.`);
       // Optionally, emit back to the caller that the user is offline
       socket.emit('call-failed', { message: 'User is not online.' });
     }
@@ -43,7 +41,6 @@ module.exports = (io, socket, onlineUsers) => {
     }
     callRooms.get(roomId).add(userId);
 
-    console.log(`User ${userId} joined call room: ${roomId}`);
 
     // Notify others in the room that a new user has joined
     socket.to(roomId).emit('user-joined-call', {
@@ -101,7 +98,6 @@ module.exports = (io, socket, onlineUsers) => {
       }
     }
 
-    console.log(`User ${userId} left call room: ${roomId}`);
 
     // Notify others in the room that a user has left
     socket.to(roomId).emit('user-left-call', {

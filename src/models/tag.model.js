@@ -10,6 +10,15 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.STRING,
         unique: true,
       },
+      normalized_name: {
+        type: DataTypes.STRING,
+        unique: true,
+        allowNull: false,
+      },
+      groupId: {
+        type: DataTypes.INTEGER,
+        allowNull: true, // Có thể có hashtag chưa được phân loại
+      }
     }, {
       tableName: 'tags',
       timestamps: false,
@@ -17,10 +26,15 @@ module.exports = (sequelize, DataTypes) => {
   
     Tag.associate = (models) => {
       Tag.belongsToMany(models.Post, {
-        through: 'PostTags',
+        through: 'post_tags',
         foreignKey: 'tagId',
         otherKey: 'postId',
         as: 'posts',
+      });
+      Tag.belongsTo(models.HashtagGroup, {
+        foreignKey: 'groupId',
+        as: 'group',
+        allowNull: true,
       });
     };
   

@@ -32,6 +32,9 @@ router.get("/blocked/me", checkAuth, userController.getBlockedUsers);
 // Get the current user's friend list
 router.get("/friends/me", checkAuth, userController.getFriends);
 
+// Get follow status with another user
+router.get("/:id/follow-status", checkAuthOptional, userController.getFollowStatus);
+
 
 // --- General User Routes ---
 // Get/Search all users (có lọc block nếu đã đăng nhập)
@@ -42,6 +45,9 @@ router.get("/check-username", userController.checkUsername);
 
 // Get all posts by user ID
 router.get("/:id/posts", checkAuthOptional, checkBlock, userController.getUserPosts);
+
+// Get all videos by username (public access)
+router.get("/:username/videos", checkAuthOptional, userController.getUserVideosByUsername);
 
 // Get user by ID
 router.get("/:id", checkAuthOptional, checkBlock, userController.getUserById);
