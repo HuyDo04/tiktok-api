@@ -55,6 +55,14 @@ exports.getPostBySlug = async (req, res) => {
 exports.createPost = async (req, res) => {
   try {
     const authorId = req.user.id;
+
+    // --- VALIDATE: Bắt buộc phải có video hoặc ảnh ---
+    const hasVideo = req.files && req.files.video && req.files.video.length > 0;
+    const hasImages = req.files && req.files.images && req.files.images.length > 0;
+    if (!hasVideo && !hasImages) {
+      return res.status(400).json({ message: "Bạn phải đăng kèm video hoặc hình ảnh." });
+    }
+
     const postData = { ...req.body, authorId };
     const newPost = await postService.createPost(postData, req.files, req.io, req.onlineUsers);
     res.status(201).json(newPost);

@@ -61,6 +61,18 @@ const removeMember = {
   }),
 };
 
+
+const getChatByMemberIds = {
+  query: Joi.object({
+    memberIds: Joi.string()
+      .required()
+      .messages({
+        'string.empty': 'memberIds is not allowed to be empty',
+        'any.required': 'memberIds is a required field',
+      }),
+  }),
+};
+
 module.exports = {
   createChat,
   getMessages,
@@ -68,4 +80,5 @@ module.exports = {
   getChatById,
   addMember,
   removeMember,
+  getChatByMemberIds,
 };

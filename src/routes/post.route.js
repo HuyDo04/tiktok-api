@@ -20,6 +20,7 @@ router.post(
   postController.createPost
 );
 
+// API set view
 router.post("/:id/view", postController.incrementViewCount);
 
 router.put(
@@ -33,5 +34,9 @@ router.delete("/:id", checkAuth, postController.deletePost);
 router.delete("/:id/media/:mediaIndex", checkAuth, postController.deletePostMedia);
 router.post("/:id/like", checkAuth, postController.likePost);
 router.delete("/:id/unlike", checkAuth, postController.unlikePost);
+
+// --- Repost Routes ---
+router.post("/:id/repost", checkAuth, postController.repostPost);
+router.delete("/:id/repost", checkAuth, postController.undoRepostPost);
 
 module.exports = router;

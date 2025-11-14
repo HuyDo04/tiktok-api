@@ -1,4 +1,4 @@
-const { User, Post, Follow, BlockedUser, PostLike, Sequelize, Tag } = require("../models");
+const { User, Post, Follow, BlockedUser, PostLike, Sequelize, Tag, Repost} = require("../models");
 const notificationService = require('../service/notification.service');
 
 const isBlocked = async (userId1, userId2) => {
@@ -348,6 +348,71 @@ exports.getUserPosts = async (targetUserId, currentUserId) => {
   return user.posts;
 };
 
+/**
+ * Lấy tất cả các bài viết mà một người dùng đã đăng lại (repost).
+ * @param {number} targetUserId - ID của người dùng có danh sách repost cần lấy.
+ * @param {number|null} currentUserId - ID của người dùng đang xem.
+ * @returns {Promise<Post[]>}
+ */
+exports.getUserReposts = async (targetUserId, currentUserId) => {
+  // Lấy các bản ghi repost của người dùng mục tiêu, bao gồm cả thông tin bài viết gốc
+  const reposts = await Repost.findAll({
+    where: { userId: targetUserId },
+    include: [
+      {
+        model: Post,
+        as: 'post',
+        include: [
+          { model: User, as: 'author', attributes: ['id', 'username', 'avatar', 'bio'] },
+          { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } },
+        ],
+        attributes: {
+          include: [
+            [
+              Sequelize.literal(`(SELECT COUNT(*) FROM PostLikes WHERE PostLikes.postId = \`post\`.\`id\`)`),
+              'likesCount',
+            ],
+            [
+              Sequelize.literal(`(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = \`post\`.\`id\`)`),
+              'repostCount',
+            ],
+          ],
+        },
+      },
+    ],
+    order: [['createdAt', 'DESC']], // Sắp xếp theo thời gian repost mới nhất
+  });
+
+  // Trích xuất các đối tượng bài viết từ kết quả repost
+  const posts = reposts.map(repost => repost.post).filter(Boolean); // Lọc ra các post null nếu có
+
+  // Thêm trạng thái isLiked và isReposted cho người dùng hiện tại
+  if (posts.length > 0 && currentUserId) {
+    const postIds = posts.map(p => p.id);
+
+    const [userLikes, userReposts] = await Promise.all([
+      PostLike.findAll({
+        where: { postId: { [Sequelize.Op.in]: postIds }, userId: currentUserId },
+        attributes: ['postId'],
+      }),
+      Repost.findAll({
+        where: { postId: { [Sequelize.Op.in]: postIds }, userId: currentUserId },
+        attributes: ['postId'],
+      }),
+    ]);
+
+    const likedPostIds = new Set(userLikes.map(l => l.postId));
+    const repostedPostIds = new Set(userReposts.map(r => r.postId));
+
+    posts.forEach(post => {
+      post.dataValues.isLiked = likedPostIds.has(post.id);
+      post.dataValues.isReposted = repostedPostIds.has(post.id);
+    });
+  }
+
+  return posts;
+};
+
 exports.getUserVideosByUsername = async (targetUsername, currentUserId) => {
   const targetUser = await User.findOne({
     where: { username: targetUsername },
@@ -489,4 +554,18 @@ exports.getFollowStatus = async (currentUserId, targetUserId) => {
   } else {
     return "Follow";
   }
+};
+
+exports.getBlockedUserIds = async (currentUserId) => {
+const blockedByUser = await BlockedUser.findAll({
+  where: { blockerId: currentUserId },
+  attributes: ['blockedId']
+}).then(blocks => blocks.map(b => b.blockedId));
+
+const usersWhoBlocked = await BlockedUser.findAll({
+  where: { blockedId: currentUserId },
+  attributes: ['blockerId']
+}).then(blocks => blocks.map(b => b.blockerId));
+
+return [...new Set([...blockedByUser, ...usersWhoBlocked])];
 };

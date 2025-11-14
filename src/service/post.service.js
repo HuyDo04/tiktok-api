@@ -61,7 +61,18 @@ exports.getPrioritizedFeedForUser = async (currentUserId, options = {}) => {
         ),
         "likesCount",
       ],
-      [Sequelize.col("viewCount"), "viewCount"],
+      [
+        Sequelize.literal(
+          `(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = Post.id)`
+        ),
+        "repostCount",
+      ],
+      [
+        Sequelize.literal(
+          `(SELECT COUNT(*) FROM Comments WHERE Comments.postId = Post.id)`
+        ),
+        "commentCount",
+      ],
     ],
   };
 
@@ -154,12 +165,31 @@ console.log('followingOnlyIds', followingOnlyIds);
     finalPosts.push(...posts);
   }
 
-  // --- Thêm trạng thái isLiked ---
-  for (const post of finalPosts) {
-    const userLike = await PostLike.findOne({
-      where: { postId: post.id, userId: currentUserId },
+  // --- Thêm trạng thái isLiked và isReposted (Tối ưu hóa) ---
+  if (finalPosts.length > 0 && currentUserId) {
+    const postIds = finalPosts.map(p => p.id);
+
+    // Lấy tất cả likes và reposts của user hiện tại cho các bài viết này trong 2 truy vấn
+    const [userLikes, userReposts] = await Promise.all([
+      PostLike.findAll({
+        where: { postId: { [Op.in]: postIds }, userId: currentUserId },
+        attributes: ['postId']
+      }),
+      Repost.findAll({
+        where: { postId: { [Op.in]: postIds }, userId: currentUserId },
+        attributes: ['postId']
+      })
+    ]);
+
+    // Tạo Set để tra cứu nhanh (O(1))
+    const likedPostIds = new Set(userLikes.map(l => l.postId));
+    const repostedPostIds = new Set(userReposts.map(r => r.postId));
+
+    // Gán trạng thái vào mỗi bài viết
+    finalPosts.forEach(post => {
+      post.dataValues.isLiked = likedPostIds.has(post.id);
+      post.dataValues.isReposted = repostedPostIds.has(post.id);
     });
-    post.dataValues.isLiked = !!userLike;
   }
 
   return finalPosts;
@@ -285,20 +315,48 @@ exports.getPostByIdWithAuthorAndTopic = async (postId, currentUserId = null) => 
     attributes: {
       include: [
         [Sequelize.col("viewCount"), "viewCount"]
+        ,
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM PostLikes WHERE PostLikes.postId = Post.id)`
+          ),
+          "likesCount",
+        ],
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = Post.id)`
+          ),
+          "repostCount",
+        ],
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM Comments WHERE Comments.postId = Post.id)`
+          ),
+          "commentCount",
+        ],
       ],
     },
   });
 
   if (!post) return null;
 
-  // Kiểm tra xem user đã like bài này chưa
+  // Kiểm tra xem user đã like và repost bài này chưa
   if (currentUserId) {
-    const userLike = await PostLike.findOne({
-      where: { postId: post.id, userId: currentUserId },
-    });
+    const [userLike, userRepost] = await Promise.all([
+      PostLike.findOne({
+        where: { postId: post.id, userId: currentUserId },
+        attributes: ['id']
+      }),
+      Repost.findOne({
+        where: { postId: post.id, userId: currentUserId },
+        attributes: ['id']
+      })
+    ]);
     post.dataValues.isLiked = !!userLike;
+    post.dataValues.isReposted = !!userRepost;
   } else {
     post.dataValues.isLiked = false;
+    post.dataValues.isReposted = false;
   }
 
   return post;
@@ -360,4 +418,305 @@ exports.updatePost = async (postId, postData, authorId, files, io, onlineUsers) 
   }
 
   return await this.getPostByIdWithAuthorAndTopic(postId, authorId);
+};
+
+exports.deletePost = async (postId, authorId) => {
+  const post = await Post.findOne({ where: { id: postId, authorId } });
+  if (!post) {
+    return false; // Không tìm thấy bài viết hoặc không có quyền xóa
+  }
+
+  // Xóa file media liên quan (nếu có)
+  if (post.media && post.media.length > 0) {
+    post.media.forEach(mediaItem => {
+      // Xóa file chính
+      if (mediaItem.url) {
+        const filePath = `public${mediaItem.url}`;
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      }
+      // Xóa thumbnail (nếu là video)
+      if (mediaItem.thumbnail) {
+        const thumbPath = `public${mediaItem.thumbnail}`;
+        if (fs.existsSync(thumbPath)) {
+          fs.unlinkSync(thumbPath);
+        }
+      }
+    });
+  }
+
+  await post.destroy(); // Sequelize sẽ xử lý xóa các bản ghi liên quan nếu đã cấu hình `onDelete: 'CASCADE'`
+  return true;
+};
+
+exports.likePost = async (postId, userId) => {
+  const post = await Post.findByPk(postId);
+  if (!post) {
+    throw new Error("Bài viết không tồn tại");
+  }
+
+  const existingLike = await PostLike.findOne({ where: { postId, userId } });
+  if (existingLike) {
+    return existingLike; // Trả về like đã tồn tại
+  }
+
+  const like = await PostLike.create({ postId, userId });
+
+  // Tạo thông báo cho chủ bài viết
+  if (post.authorId !== userId) {
+    await notificationService.createNotification({
+      recipientId: post.authorId,
+      senderId: userId,
+      type: 'like_post',
+      entityId: post.id
+    });
+  }
+
+  return like;
+};
+
+exports.unlikePost = async (postId, userId) => {
+  const like = await PostLike.findOne({ where: { postId, userId } });
+  if (!like) {
+    throw new Error("Bạn chưa thích bài viết này");
+  }
+
+  await like.destroy();
+  return { message: "Đã bỏ thích bài viết thành công" };
+};
+
+exports.deletePostMedia = async (postId, mediaIndex, userId) => {
+  // Logic để xóa media cụ thể, bạn có thể triển khai sau nếu cần.
+  return null;
+};
+
+exports.getVisiblePostsForUser = async (targetUserId, currentUserId) => {
+  let allowedVisibilities = ['public'];
+
+  if (currentUserId) {
+    if (currentUserId === targetUserId) {
+      // Chủ sở hữu xem được tất cả
+      allowedVisibilities = ['public', 'friends', 'private'];
+    } else {
+      // Kiểm tra có phải bạn bè không
+      const areFriends = await userService.areTheyFriends(currentUserId, targetUserId);
+      if (areFriends) {
+        allowedVisibilities.push('friends');
+      }
+    }
+  }
+
+  return await Post.findAll({
+    where: {
+      authorId: targetUserId,
+      visibility: { [Op.in]: allowedVisibilities },
+    },
+    include: [
+      { model: User, as: 'author', attributes: ['id', 'username', 'avatar'] },
+      { model: Tag, as: 'tags', attributes: ['id', 'name'], through: { attributes: [] } },
+    ],
+    order: [['publishedAt', 'DESC']],
+    attributes: {
+      include: [
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM PostLikes WHERE PostLikes.postId = Post.id)`),
+          "likesCount",
+        ],
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = Post.id)`),
+          "repostCount",
+        ],
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM Comments WHERE Comments.postId = Post.id)`
+          ),
+          "commentCount",
+        ],
+      ],
+    }
+  });
+};
+
+/**
+ * Lấy bài viết theo hashtag.
+ * @param {string} tagName - Tên hashtag (không bao gồm '#').
+ * @param {number|null} currentUserId - ID của người dùng đang xem.
+ * @returns {Promise<Post[]>}
+ */
+exports.getPostsByHashtag = async (tagName, currentUserId) => {
+  const normalizedTagName = removeAccents(tagName).toLowerCase();
+
+  const whereClause = {
+    visibility: 'public' // Mặc định chỉ tìm bài public
+  };
+
+  // Nếu người dùng đã đăng nhập, loại trừ các bài viết từ người dùng bị chặn
+  if (currentUserId) {
+    const blockedUserIds = await userService.getBlockedUserIds(currentUserId);
+    if (blockedUserIds.length > 0) {
+      whereClause.authorId = { [Op.notIn]: blockedUserIds };
+    }
+  }
+
+  const posts = await Post.findAll({
+    where: whereClause,
+    include: [
+      {
+        model: Tag,
+        as: 'tags',
+        where: { normalized_name: normalizedTagName },
+        attributes: [], // Không cần lấy thông tin tag ở đây
+        through: { attributes: [] },
+      },
+      {
+        model: User,
+        as: 'author',
+        attributes: ['id', 'username', 'avatar', 'bio'],
+      },
+    ],
+    order: [['publishedAt', 'DESC']],
+    attributes: {
+      include: [
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM PostLikes WHERE PostLikes.postId = Post.id)`),
+          "likesCount",
+        ],
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = Post.id)`),
+          "repostCount",
+        ],
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM Comments WHERE Comments.postId = Post.id)`
+          ),
+          "commentCount",
+        ],
+      ],
+    }
+  });
+
+  return posts;
+};
+
+/**
+ * Lấy bài viết theo người dùng được mention.
+ * @param {string} username - Username của người được mention.
+ * @param {number|null} currentUserId - ID của người dùng đang xem.
+ * @returns {Promise<Post[]>}
+ */
+exports.getPostsByMentionedUser = async (username, currentUserId) => {
+  const mentionedUser = await User.findOne({ where: { username } });
+  if (!mentionedUser) return [];
+
+  const whereClause = {
+    visibility: 'public'
+  };
+
+  if (currentUserId) {
+    const blockedUserIds = await userService.getBlockedUserIds(currentUserId);
+    if (blockedUserIds.length > 0) {
+      whereClause.authorId = { [Op.notIn]: blockedUserIds };
+    }
+  }
+
+  return await Post.findAll({
+    where: whereClause,
+    include: [
+      {
+        model: User,
+        as: 'mentionedUsers',
+        where: { id: mentionedUser.id },
+        attributes: [],
+        through: { attributes: [] },
+      },
+      {
+        model: User,
+        as: 'author',
+        attributes: ['id', 'username', 'avatar', 'bio'],
+      },
+      {
+        model: Tag,
+        as: 'tags',
+        attributes: ['id', 'name'],
+        through: { attributes: [] },
+      },
+    ],
+    order: [['publishedAt', 'DESC']],
+    attributes: {
+      include: [
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM PostLikes WHERE PostLikes.postId = Post.id)`),
+          "likesCount",
+        ],
+        [
+          Sequelize.literal(`(SELECT COUNT(*) FROM Reposts WHERE Reposts.postId = Post.id)`),
+          "repostCount",
+        ],
+        [
+          Sequelize.literal(
+            `(SELECT COUNT(*) FROM Comments WHERE Comments.postId = Post.id)`
+          ),
+          "commentCount",
+        ],
+      ],
+    }
+  });
+};
+
+exports.getPostsByContent = async (query, currentUserId) => {
+  // Hàm này hiện tại chưa được triển khai đầy đủ logic tìm kiếm phức tạp.
+  // Bạn có thể thêm logic tìm kiếm toàn văn (full-text search) ở đây.
+  // Tạm thời trả về mảng rỗng.
+  return [];
+};
+
+/**
+ * Đăng lại một bài viết.
+ * @param {number} postId - ID của bài viết cần đăng lại.
+ * @param {number} userId - ID của người dùng thực hiện đăng lại.
+ * @returns {Promise<Repost>}
+ */
+exports.repostPost = async (postId, userId) => {
+  const post = await Post.findByPk(postId);
+  if (!post) {
+    throw new Error("Bài viết không tồn tại.");
+  }
+
+  if (post.authorId === userId) {
+    throw new Error("Bạn không thể đăng lại bài viết của chính mình.");
+  }
+
+  const existingRepost = await Repost.findOne({ where: { postId, userId } });
+  if (existingRepost) {
+    throw new Error("Bạn đã đăng lại bài viết này rồi.");
+  }
+
+  const repost = await Repost.create({ postId, userId });
+
+  // Tạo thông báo cho chủ bài viết
+  await notificationService.createNotification({
+    recipientId: post.authorId,
+    senderId: userId,
+    type: 'repost',
+    entityId: post.id,
+  });
+
+  return repost;
+};
+
+/**
+ * Hủy đăng lại một bài viết.
+ * @param {number} postId - ID của bài viết đã đăng lại.
+ * @param {number} userId - ID của người dùng thực hiện hủy.
+ * @returns {Promise<{message: string}>}
+ */
+exports.undoRepostPost = async (postId, userId) => {
+  const repost = await Repost.findOne({ where: { postId, userId } });
+  if (!repost) {
+    throw new Error("Bạn chưa đăng lại bài viết này.");
+  }
+
+  await repost.destroy();
+  return { message: "Đã hủy đăng lại thành công." };
 };

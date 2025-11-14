@@ -1,6 +1,6 @@
 'use strict';
 
-const { Chat, ChatMember, User, Message, sequelize } = require('../models');
+const { Chat, ChatMember, User, Message, sequelize, Follow } = require('../models');
 const { Op } = require('sequelize');
 
 class ChatService {
@@ -14,19 +14,38 @@ class ChatService {
       }
 
       // Kiểm tra xem chat giữa 2 người đã tồn tại chưa
-      const existingChat = await Chat.findOne({
-        where: { type: 'private' },
-        include: [
-          {
-            model: ChatMember,
-            as: 'chatMembers',
-            where: { user_id: { [Op.in]: [creatorId, receiverId] } },
-            attributes: [],
-          },
-        ],
-        group: ['Chat.id'],
-        having: sequelize.literal('COUNT(DISTINCT chatMembers.user_id) = 2'),
+      // const existingChat = await Chat.findOne({
+      //   where: { type: 'private' },
+      //   include: [
+      //     {
+      //       model: ChatMember,
+      //       as: 'chatMembers',
+      //       where: { user_id: { [Op.in]: [creatorId, receiverId] } },
+      //       attributes: [],
+      //     },
+      //   ],
+      //   group: ['Chat.id'],
+      //   having: sequelize.literal('COUNT(DISTINCT chatMembers.user_id) = 2'),
+      // });
+
+      const memberIds = [creatorId, receiverId];
+      const existingChatSubquery = await ChatMember.findAll({
+        attributes: ['chat_id', [sequelize.fn('COUNT', sequelize.col('chat_id')), 'member_count']],
+        include: [{
+          model: Chat,
+          as: 'chat',
+          attributes: [],
+          where: { type: 'private' }
+        }],
+        where: {
+          user_id: { [Op.in]: memberIds }
+        },
+        group: ['chat_id'],
+        having: sequelize.literal(`member_count = 2`)
       });
+
+      const existingChatId = existingChatSubquery.length > 0 ? existingChatSubquery[0].chat_id : null;
+      const existingChat = existingChatId ? await Chat.findByPk(existingChatId) : null;
 
       if (existingChat) {
         return this.getChatById(existingChat.id, creatorId);
@@ -34,8 +53,19 @@ class ChatService {
 
       const t = await sequelize.transaction();
       try {
+        // Kiểm tra xem hai người dùng có phải là bạn bè không
+        const areFriends = await Follow.findOne({
+          where: {
+            followerId: creatorId,
+            followingId: receiverId,
+            isFriend: true,
+          },
+        });
+
+        const initialStatus = areFriends ? 'active' : 'pending';
+
         const chat = await Chat.create(
-          { type: 'private', created_by: creatorId, status: 'pending' },
+          { type: 'private', created_by: creatorId, status: initialStatus },
           { transaction: t }
         );
 
@@ -106,9 +136,9 @@ class ChatService {
       throw new Error('Chat not found.');
     }
 
-    if (chat.status === 'pending') {
-      throw new Error('Cannot retrieve messages from a pending chat.');
-    }
+    // if (chat.status === 'pending') {
+    //   throw new Error('Cannot retrieve messages from a pending chat.');
+    // }
 
     const messages = await Message.findAndCountAll({
       where: { chat_id: chatId },
@@ -165,7 +195,7 @@ class ChatService {
 
       const chat = await Chat.findByPk(chatId, { transaction: t });
       if (!chat) throw new Error('Chat not found.');
-      if (chat.status === 'pending') throw new Error('Chat not active yet.');
+      // if (chat.status === 'pending') throw new Error('Chat not active yet.');
 
       const message = await Message.create(
         {
@@ -293,6 +323,7 @@ class ChatService {
           as: 'messages',
           order: [['createdAt', 'DESC']],
           limit: 1,
+          required: true, // 🟢 CHỈ LẤY CHAT CÓ ÍT NHẤT 1 TIN NHẮN
           include: [
             { model: User, as: 'sender', attributes: ['id', 'username', 'avatar'] },
           ],
@@ -567,21 +598,51 @@ async getChatMembers(chatId) {
     return chat;
   }
 
-  async getChatByMemberIds(memberIds) {
-    const chat = await Chat.findOne({
-      include: [
-        {
-          model: ChatMember,
-          as: 'chatMembers',
-          where: { user_id: { [Op.in]: memberIds } },
-          attributes: [],
-        },
-      ],
-      group: ['Chat.id'],
-      having: sequelize.literal(`COUNT(DISTINCT chatMembers.user_id) = ${memberIds.length}`),
-    });
+  async getChatByMemberIds(memberIdsInput) {
+    try {
+      // --- Chuẩn hóa memberIds ---
+      const memberIds = Array.isArray(memberIdsInput)
+        ? memberIdsInput.map(id => parseInt(id, 10))
+        : typeof memberIdsInput === 'string'
+          ? memberIdsInput.split(',').map(id => parseInt(id.trim(), 10))
+          : [];
 
-    return chat;
+      const uniqueMemberIds = [...new Set(memberIds.filter(id => !isNaN(id)))];
+
+      if (uniqueMemberIds.length === 0) {
+        console.warn('[ChatService] Không có memberIds hợp lệ.');
+        return null;
+      }
+
+      // --- Query Chat ---
+      const chats = await Chat.findAll({
+        where: {
+          id: {
+            [Op.in]: sequelize.literal(`(
+              SELECT chat_id
+              FROM chat_members
+              WHERE user_id IN (${uniqueMemberIds.join(',')})
+              GROUP BY chat_id
+              HAVING COUNT(DISTINCT user_id) = ${uniqueMemberIds.length}
+            )`)
+          }
+        },
+        limit: 1,
+      });
+      
+
+      const chat = chats.length > 0 ? chats[0] : null;
+
+      console.log(
+        `[ChatService] Tìm chat theo memberIds: [${uniqueMemberIds.join(', ')}] =>`,
+        chat ? 'Tìm thấy' : 'Không có'
+      );
+
+      return chat;
+    } catch (error) {
+      console.error('[ChatService] Lỗi khi tìm chat theo memberIds:', error);
+      throw error;
+    }
   }
 }
 

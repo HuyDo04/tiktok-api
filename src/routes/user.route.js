@@ -46,6 +46,9 @@ router.get("/check-username", userController.checkUsername);
 // Get all posts by user ID
 router.get("/:id/posts", checkAuthOptional, checkBlock, userController.getUserPosts);
 
+// Get all reposts by user ID
+router.get("/:id/reposts", checkAuthOptional, checkBlock, userController.getUserReposts);
+
 // Get all videos by username (public access)
 router.get("/:username/videos", checkAuthOptional, userController.getUserVideosByUsername);
 

@@ -1,31 +1,8 @@
-const { Comment, User, CommentLike, Post} = require('@/models');
-const { Op } = require('sequelize');
+const { Comment, User, CommentLike, Post, sequelize} = require('@/models');
+const { Op, Sequelize } = require('sequelize');
 const notificationService = require('../service/notification.service');
 
-const MAX_DEPTH = 3;
-
-// Helper function to add like counts and isLiked status to comments
-const addLikeData = async (comment, currentUserId) => {
-  if (!comment) return null;
-
-  const likesCount = await CommentLike.count({ where: { commentId: comment.id } });
-  comment.dataValues.likesCount = likesCount;
-
-  if (currentUserId) {
-    const userLike = await CommentLike.findOne({ where: { commentId: comment.id, userId: currentUserId } });
-    comment.dataValues.isLiked = !!userLike;
-  } else {
-    comment.dataValues.isLiked = false;
-  }
-
-  if (comment.replies) {
-    for (const reply of comment.replies) {
-      await addLikeData(reply, currentUserId);
-    }
-  }
-
-  return comment;
-};
+const MAX_DEPTH = 1;
 
 // Helper function to extract mentions from text
 const extractMentions = (text) => {
@@ -48,23 +25,10 @@ const processCommentMentions = async (comment, text, io, onlineUsers) => {
     await notificationService.createNotification({ recipientId: user.id, senderId: comment.authorId, type: "mention_comment", entityId: comment.id }, io, onlineUsers);
   }
 };
+
 const commentService = {
   // Tạo comment mới (có xử lý giới hạn 3 cấp reply)
   async create(data, io, onlineUsers) {
-    if (data.parentId) {
-      const parentComment = await Comment.findByPk(data.parentId);
-      if (!parentComment) {
-        throw new Error('Parent comment not found');
-      }
-
-      const depth = await this.getCommentDepth(parentComment);
-      if (depth >= MAX_DEPTH) {
-        // Nếu comment cha đã ở độ sâu tối đa,
-        // thì comment mới sẽ trở thành "anh em" với nó,
-        // bằng cách lấy parentId của comment cha làm parentId cho mình.
-        data.parentId = parentComment.parentId;
-      }
-    }
     const comment = await Comment.create(data);
 
     // --- LOGIC THÔNG BÁO MỚI ---
@@ -86,14 +50,6 @@ const commentService = {
     return this.getById(comment.id, data.authorId); // Trả về kèm author và trạng thái like
   },
 
-  // Hàm đệ quy để tính độ sâu của comment
-  async getCommentDepth(comment, currentDepth = 1) {
-    if (!comment.parentId) return currentDepth;
-    const parent = await Comment.findByPk(comment.parentId);
-    if (!parent) return currentDepth;
-    return this.getCommentDepth(parent, currentDepth + 1);
-  },
-
   // Lấy 1 comment theo id (bao gồm thông tin author)
   async getById(id, currentUserId) {
     const comment = await Comment.findByPk(id, {
@@ -105,50 +61,81 @@ const commentService = {
         },
       ]
     });
-    return addLikeData(comment, currentUserId);
+    // Lấy thêm dữ liệu like cho comment vừa tạo
+    if (!comment) return null;
+    const likesCount = await CommentLike.count({ where: { commentId: comment.id } });
+    comment.dataValues.likesCount = likesCount;
+    if (currentUserId) {
+      const userLike = await CommentLike.findOne({ where: { commentId: comment.id, userId: currentUserId } });
+      comment.dataValues.isLiked = !!userLike;
+    } else {
+      comment.dataValues.isLiked = false;
+    }
+    return comment;
   },
 
   // Lấy tất cả comment theo postId (bao gồm replies và nested replies)
   async getByPost(postId, currentUserId) {
-    const comments = await Comment.findAll({
-      where: { postId, parentId: null },
-      order: [['createdAt', 'DESC']],
-      include: [
-        {
-          model: User,
-          as: 'author',
-          attributes: ['id', 'username', 'avatar', 'bio'],
-        },
-        {
-          model: Comment,
-          as: 'replies',
-          include: [
-            {
-              model: User,
-              as: 'author',
-              attributes: ['id', 'username', 'avatar', 'bio'],
-            },
-            {
-              model: Comment,
-              as: 'replies',
-              include: [
-                {
-                  model: User,
-                  as: 'author',
-                  attributes: ['id', 'username', 'avatar', 'bio'],
-                }
-              ]
-            }
-          ]
-        }
-      ]
+    // 1. Lấy tất cả comment của bài viết trong một danh sách phẳng
+    const allComments = await Comment.findAll({
+      where: { postId },
+      include: [{ model: User, as: 'author', attributes: ['id', 'username', 'avatar', 'bio'] }],
+      attributes: {
+        include: [
+          [Sequelize.literal(`(SELECT COUNT(*) FROM CommentLikes WHERE CommentLikes.commentId = Comment.id)`), 'likesCount'],
+          currentUserId ? [
+            Sequelize.literal(`(EXISTS(SELECT 1 FROM CommentLikes WHERE CommentLikes.commentId = Comment.id AND CommentLikes.userId = ${currentUserId}))`),
+            'isLiked'
+          ] : [Sequelize.literal('false'), 'isLiked']
+        ]
+      },
+      order: [['createdAt', 'ASC']], // Sắp xếp từ cũ đến mới để xây dựng cây
     });
 
-    for (const comment of comments) {
-      await addLikeData(comment, currentUserId);
-    }
+    // 2. Xây dựng cây comment từ danh sách phẳng
+    const commentMap = {};
+    const rootComments = [];
 
-    return comments;
+    // Đưa tất cả comment vào một map để truy cập nhanh
+    allComments.forEach(comment => {
+      comment.dataValues.replies = []; // Khởi tạo mảng replies
+      commentMap[comment.id] = comment;
+    });
+
+    // Hàm đệ quy để tìm comment cha ở độ sâu mong muốn
+    const findParentAtDepth = (commentId, targetDepth) => {
+      let current = commentMap[commentId];
+      let depth = 0;
+      let path = [current];
+      while (current && current.parentId) {
+        current = commentMap[current.parentId];
+        path.unshift(current);
+        depth++;
+      }
+      // Nếu độ sâu thực tế lớn hơn độ sâu mục tiêu, trả về comment cha ở đúng độ sâu đó
+      if (depth >= targetDepth && path[targetDepth]) {
+        return path[targetDepth];
+      }
+      // Ngược lại, trả về cha trực tiếp
+      return commentMap[commentId];
+    };
+
+    allComments.forEach(comment => {
+      if (comment.parentId) {
+        // Tìm comment cha phù hợp để gắn vào
+        const parent = findParentAtDepth(comment.parentId, MAX_DEPTH - 1);
+        if (parent) {
+          parent.dataValues.replies.push(comment);
+        } else {
+          // Trường hợp comment cha bị xóa hoặc không tìm thấy
+          rootComments.push(comment);
+        }
+      } else {
+        rootComments.push(comment);
+      }
+    });
+
+    return rootComments.sort((a, b) => b.createdAt - a.createdAt); // Sắp xếp lại comment gốc từ mới đến cũ
   },
 
   // Cập nhật nội dung comment
@@ -215,6 +202,32 @@ const commentService = {
 
     await like.destroy();
     return { message: 'Comment unliked successfully' };
+  },
+
+  /**
+   * Tạo một comment trả lời (reply)
+   * @param {object} replyData - Dữ liệu của reply
+   * @param {string} replyData.parentId - ID của comment cha
+   * @param {string} replyData.authorId - ID của người trả lời
+   * @param {string} replyData.content - Nội dung trả lời
+   * @returns {Promise<Document>} Comment trả lời vừa được tạo
+   */
+  async replyToComment({ parentId, authorId, content }, io, onlineUsers) {
+    // 1. Tìm comment cha để lấy postId
+    const parentComment = await Comment.findByPk(parentId, {
+      attributes: ['postId']
+    });
+    if (!parentComment) {
+      throw new Error('Parent comment not found');
+    }
+ 
+    // 2. Gọi hàm create chính để xử lý logic tạo, bao gồm cả kiểm tra độ sâu
+    return this.create({
+      postId: parentComment.postId, // Lấy postId từ comment cha
+      authorId: authorId,
+      content: content,
+      parentId: parentId, // Gán ID của comment cha
+    }, io, onlineUsers);
   },
 };
 

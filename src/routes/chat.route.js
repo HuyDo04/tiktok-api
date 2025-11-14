@@ -6,6 +6,7 @@ const chatController = require('../controllers/chat.controller');
 const chatValidator = require('../validators/chat.validator');
 const validate = require('../middleware/validate');
 const checkAuth = require('../middleware/checkAuth');
+const validateQuery = require('@/middleware/validateQuery');
 
 // ===============================
 // 🔹 Tạo chat mới (1-1 hoặc nhóm)
@@ -33,6 +34,13 @@ router.get('/requests', checkAuth, chatController.getPendingChats);
 router.patch('/requests/:chatId/accept', checkAuth, chatController.acceptChatRequest);
 router.delete('/requests/:chatId/decline', checkAuth, chatController.declineChatRequest);
 
+
+router.get(
+  '/find/by-members',
+  checkAuth,
+  validateQuery(chatValidator.getChatByMemberIds),
+  chatController.getChatByMemberIds
+);
 // ===============================
 // 🔹 Lấy thông tin chi tiết chat
 // ===============================
@@ -111,11 +119,6 @@ router.patch(
 // ===============================
 // 🔹 Tìm chat theo danh sách memberIds
 // ===============================
-router.get(
-  '/find/by-members',
-  checkAuth,
-  validate(chatValidator.getChatByMemberIds),
-  chatController.getChatByMemberIds
-);
+
 
 module.exports = router;

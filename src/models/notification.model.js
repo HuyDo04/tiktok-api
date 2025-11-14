@@ -16,7 +16,7 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
     },
     type: {
-      type: DataTypes.ENUM('like_post', 'like_comment', 'new_follower', 'new_friend', 'mention_post', 'new_comment', 'mention_comment'),
+      type: DataTypes.ENUM('like_post', 'like_comment', 'new_follower', 'new_friend', 'mention_post', 'new_comment', 'mention_comment', 'repost'),
       allowNull: false
     },
     entityId: {

@@ -106,6 +106,29 @@ const commentController = {
       next(error);
     }
   },
+
+  // Reply to a comment
+  async replyToComment(req, res, next) {
+    try {
+      const parentId = req.params.id;
+      const { content } = req.body;
+      const authorId = req.user.id; // Lấy từ middleware xác thực
+
+      if (!content) {
+        return res.status(400).json({ message: "Content is required" });
+      }
+
+      const newReply = await commentService.replyToComment({
+        parentId,
+        authorId,
+        content,
+      });
+
+      res.status(201).json(newReply);
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 module.exports = commentController;

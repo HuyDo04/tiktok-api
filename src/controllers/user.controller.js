@@ -121,6 +121,23 @@ exports.getUserPosts = async (req, res) => {
   }
 };
 
+exports.getUserReposts = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const currentUserId = req.user ? req.user.id : null;
+
+    const repostedPosts = await userService.getUserReposts(targetUserId, currentUserId);
+    res.json(repostedPosts);
+  } catch (error) {
+    console.error("Lỗi khi lấy danh sách bài viết đã đăng lại:", error);
+    if (error.message === "User not found") {
+      return res.status(404).json({ message: "Người dùng không tồn tại." });
+    }
+    res.status(500).json({ message: "Lỗi server khi lấy danh sách bài viết đã đăng lại." });
+  }
+};
+
+
 exports.getUserVideosByUsername = async (req, res) => {
   try {
     const currentUserId = req.user ? req.user.id : null;

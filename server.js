@@ -4,10 +4,9 @@ require('module-alias/register');
 const cors = require("cors");
 const express = require('express');
 const http = require('http');
-const { Server } = require("socket.io");
 const router = require("./src/routes");
 const cookieParser = require('cookie-parser');
-const initializeSocket = require('./src/socket');
+const { init: initializeSocket } = require('./src/socket');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,15 +16,7 @@ const clientOrigin = process.env.FRONTEND_URL || "http://localhost:5173";
 
 console.log(`CORS Origin configured for: ${clientOrigin}`);
 
-const io = new Server(server, {
-  cors: {
-    origin: clientOrigin,
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
-
-initializeSocket(io);
+initializeSocket(server);
 
 app.use(cors({
   origin: clientOrigin,
