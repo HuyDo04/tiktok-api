@@ -303,7 +303,7 @@ class ChatService {
   }
 
   // getChats
-   async getChats(userId) {
+  async getChats(userId) {
     const chats = await Chat.findAll({
       include: [
         {
@@ -332,11 +332,23 @@ class ChatService {
       order: [['updatedAt', 'DESC']],
     });
 
-    for (const chat of chats) {
-      chat.dataValues.unreadCount = await this.countUnreadMessages(userId, chat.id);
-    }
+    // Tối ưu hóa: Sử dụng Promise.all để chạy song song các tác vụ bất đồng bộ
+    const chatsWithDetails = await Promise.all(
+      chats.map(async (chat) => {
+        const plainChat = chat.get({ plain: true }); // Chuyển thành object thuần túy
 
-    return chats;
+        // Gán lastMessage để dễ truy cập hơn ở client
+        plainChat.lastMessage = plainChat.messages?.[0] || null;
+        delete plainChat.messages; // Xóa mảng messages gốc cho gọn
+
+        // Đếm số tin nhắn chưa đọc
+        plainChat.unreadCount = await this.countUnreadMessages(userId, plainChat.id);
+
+        return plainChat;
+      })
+    );
+
+    return chatsWithDetails;
   }
 
 // getChatMember

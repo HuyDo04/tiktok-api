@@ -92,25 +92,21 @@ exports.getPrioritizedFeedForUser = async (currentUserId, options = {}) => {
   }
  // --- Người dùng đã đăng nhập ---
  const friends = await userService.getFriends(currentUserId);
-const followers = await userService.getFollowers(currentUserId, currentUserId);
+  const followers = await userService.getFollowers(currentUserId, currentUserId);
 
-// Lấy mảng ID từ friend objects
-const friendIds = Array.isArray(friends) ? friends.map(u => u.id) : [];
+  // Lấy mảng ID từ friend objects
+  const friendIds = Array.isArray(friends) ? friends.map(u => u.id) : [];
 
-// Lấy mảng ID từ follower objects
-let followingIds = [];
-if (Array.isArray(followers)) {
-  followingIds = followers.map(u => u.id);
-} else if (followers) {
-  followingIds = [followers.id]; // Nếu trả về 1 object
-}
+  // Lấy mảng ID từ follower objects
+  let followingIds = [];
+  if (Array.isArray(followers)) {
+    followingIds = followers.map(u => u.id);
+  } else if (followers) {
+    followingIds = [followers.id]; // Nếu trả về 1 object
+  }
 
-// Lấy ID của người chỉ follow (không phải bạn bè)
-const followingOnlyIds = followingIds.filter(id => !friendIds.includes(id));
-
-console.log('friendIds', friendIds);
-console.log('followingIds', followingIds);
-console.log('followingOnlyIds', followingOnlyIds);
+  // Lấy ID của người chỉ follow (không phải bạn bè)
+  const followingOnlyIds = followingIds.filter(id => !friendIds.includes(id));
 
   // Những người khác (không phải bạn, không phải follow, không phải chính mình)
   const excludedUserIds = [...friendIds, ...followingIds, currentUserId];
@@ -165,6 +161,15 @@ console.log('followingOnlyIds', followingOnlyIds);
     finalPosts.push(...posts);
   }
 
+  // --- 4. Sắp xếp lại toàn bộ kết quả theo thời gian ---
+  // Sắp xếp mảng finalPosts để đảm bảo các bài viết mới nhất luôn ở trên cùng,
+  // bất kể chúng thuộc nhóm ưu tiên nào (bạn bè, đang theo dõi, hay công khai).
+  // Sử dụng `createdAt` làm phương án dự phòng nếu `publishedAt` là null.
+  finalPosts.sort((a, b) => {
+    const dateA = a.publishedAt || a.createdAt;
+    const dateB = b.publishedAt || b.createdAt;
+    return new Date(dateB) - new Date(dateA);
+  });
   // --- Thêm trạng thái isLiked và isReposted (Tối ưu hóa) ---
   if (finalPosts.length > 0 && currentUserId) {
     const postIds = finalPosts.map(p => p.id);
@@ -575,7 +580,7 @@ exports.getPostsByHashtag = async (tagName, currentUserId) => {
         attributes: ['id', 'username', 'avatar', 'bio'],
       },
     ],
-    order: [['publishedAt', 'DESC']],
+    order: [['publishedAt', "DESC"]],
     attributes: {
       include: [
         [
@@ -642,7 +647,7 @@ exports.getPostsByMentionedUser = async (username, currentUserId) => {
         through: { attributes: [] },
       },
     ],
-    order: [['publishedAt', 'DESC']],
+    order: [['publishedAt', "DESC"]],
     attributes: {
       include: [
         [
