@@ -17,9 +17,11 @@ exports.searchUsers = async (req, res) => {
 // Get user by ID 
 exports.getUserById = async (req, res) => {
     try {
+        const targetUserId = req.params.id;
+        const currentUserId = req.user ? req.user.id : null;
         // Middleware checkBlock đã xử lý việc chặn.
         // Nếu request đến được đây, nghĩa là không có block.
-        const user = await userService.getUserById(req.params.id);
+        const user = await userService.getUserById(targetUserId, currentUserId);
         
         if (!user) {
             return res.status(404).json({ message: "Người dùng không tồn tại." });

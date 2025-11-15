@@ -280,10 +280,10 @@ exports.getAllUser = async (currentUserId, searchQuery) => {
   });
 };
 
-exports.getUserById = async (userId) => {
+exports.getUserById = async (targetUserId, currentUserId) => {
   // Logic kiểm tra block đã được chuyển hoàn toàn sang middleware `checkBlock`.
   // Hàm này giờ chỉ có nhiệm vụ lấy thông tin user.
-  return await User.findByPk(userId, {
+  const user = await User.findByPk(targetUserId, {
     attributes: {
       exclude: ['password', 'verify_token', 'reset_password_otp', 'verify_token_expires_at', 'reset_password_otp_expires_at']
     },
@@ -302,6 +302,14 @@ exports.getUserById = async (userId) => {
       }
     ]
   });
+
+  if (user) {
+    // Thêm trạng thái follow vào đối tượng user
+    const followStatus = await exports.getFollowStatus(currentUserId, targetUserId);
+    user.dataValues.followStatus = followStatus;
+  }
+
+  return user;
 };
 
 exports.updateUser = async (id, userData) => {
